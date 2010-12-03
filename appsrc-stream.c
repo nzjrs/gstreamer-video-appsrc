@@ -2,6 +2,7 @@
 
 #include <gst/gst.h>
 #include <gst/app/gstappsrc.h>
+#include <gst/app/gstappbuffer.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -43,16 +44,13 @@ read_data (App * app)
         gboolean    ok = TRUE;
         guint       len = 640*480*3*sizeof(guchar);
 
-        buffer = gst_buffer_new();
 
         pb = gdk_pixbuf_new(GDK_COLORSPACE_RGB, FALSE, 8, 640, 480);
 
         colour = g_rand_int_range(app->rand, 0x00, 0xFF);
         gdk_pixbuf_fill(pb, (colour << 24) | (colour << 16) | (colour << 8) | 0x000000FF);
 
-        GST_BUFFER_DATA (buffer) = gdk_pixbuf_get_pixels(pb);
-        GST_BUFFER_SIZE (buffer) = 640*480*3*sizeof(guchar);
-//        memcpy(GST_BUFFER_DATA (buffer), gdk_pixbuf_get_pixels(pb), len);
+        buffer = gst_app_buffer_new (gdk_pixbuf_get_pixels(pb), len, g_object_unref, pb);
 
         GST_DEBUG ("feed buffer");
         ret = gst_app_src_push_buffer (app->appsrc, buffer);
