@@ -51,6 +51,7 @@ read_data (App * app)
         gdk_pixbuf_fill(pb, (colour << 24) | (colour << 16) | (colour << 8) | 0x000000FF);
 
         buffer = gst_app_buffer_new (gdk_pixbuf_get_pixels(pb), len, g_object_unref, pb);
+        //GST_BUFFER_TIMESTAMP(buffer) = gst_util_get_timestamp ();
 
         GST_DEBUG ("feed buffer");
         ret = gst_app_src_push_buffer (app->appsrc, buffer);
