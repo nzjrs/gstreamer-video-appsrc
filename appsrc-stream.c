@@ -1,3 +1,5 @@
+/* gcc gdk-gstappsrc-stream.c -Wall `pkg-config --cflags --libs gstreamer-app-0.10 gdk-pixbuf-2.0` -o gdkstream */
+
 #include <gst/gst.h>
 #include <gst/app/gstappsrc.h>
 
@@ -15,12 +17,13 @@ typedef struct _App App;
 struct _App
 {
   GstElement *pipeline;
-  GstElement *appsrc;
+  GstAppSrc *appsrc;
 
   GMainLoop *loop;
   guint sourceid;
 
   GTimer *timer;
+  GRand *rand;
 
 };
 
@@ -29,27 +32,30 @@ App s_app;
 static gboolean
 read_data (App * app)
 {
-    guint len;
     GstFlowReturn ret;
     gdouble ms;
 
     ms = g_timer_elapsed(app->timer, NULL);
-    if (ms > 1.0/20.0) {
-        GstBuffer *buffer;
-        GdkPixbuf *pb;
-        gboolean ok = TRUE;
+    if (ms > 1.0) {
+        GstBuffer   *buffer;
+        GdkPixbuf   *pb;
+        guint32     colour;
+        gboolean    ok = TRUE;
+        guint       len = 640*480*3*sizeof(guchar);
 
         buffer = gst_buffer_new();
 
         pb = gdk_pixbuf_new(GDK_COLORSPACE_RGB, FALSE, 8, 640, 480);
-        gdk_pixbuf_fill(pb, 0xffffffff);
+
+        colour = g_rand_int_range(app->rand, 0x00, 0xFF);
+        gdk_pixbuf_fill(pb, (colour << 24) | (colour << 16) | (colour << 8) | 0x000000FF);
 
         GST_BUFFER_DATA (buffer) = gdk_pixbuf_get_pixels(pb);
         GST_BUFFER_SIZE (buffer) = 640*480*3*sizeof(guchar);
+//        memcpy(GST_BUFFER_DATA (buffer), gdk_pixbuf_get_pixels(pb), len);
 
         GST_DEBUG ("feed buffer");
-        g_signal_emit_by_name (app->appsrc, "push-buffer", buffer, &ret);
-        gst_buffer_unref (buffer);
+        ret = gst_app_src_push_buffer (app->appsrc, buffer);
 
         if (ret != GST_FLOW_OK) {
             /* some error, stop sending data */
@@ -63,7 +69,7 @@ read_data (App * app)
     }
 
     //  g_signal_emit_by_name (app->appsrc, "end-of-stream", &ret);
-    return FALSE;
+    return TRUE;
 }
 
 /* This signal callback is called when appsrc needs data, we add an idle handler
@@ -73,7 +79,7 @@ start_feed (GstElement * pipeline, guint size, App * app)
 {
   if (app->sourceid == 0) {
     GST_DEBUG ("start feeding");
-    app->sourceid = g_idle_add ((GSourceFunc) read_data, app);
+    app->sourceid = g_timeout_add (10, (GSourceFunc) read_data, app);
   }
 }
 
@@ -121,59 +127,67 @@ bus_message (GstBus * bus, GstMessage * message, App * app)
 int
 main (int argc, char *argv[])
 {
-  App *app = &s_app;
-  GError *error = NULL;
-  GstBus *bus;
-  GstCaps *caps;
+    App *app = &s_app;
+    GstBus *bus;
+    GstCaps *caps;
 
-  gst_init (&argc, &argv);
+    gst_init (&argc, &argv);
 
-  GST_DEBUG_CATEGORY_INIT (appsrc_pipeline_debug, "appsrc-pipeline", 0,
+    GST_DEBUG_CATEGORY_INIT (appsrc_pipeline_debug, "appsrc-pipeline", 0,
       "appsrc pipeline example");
 
-  /* create a mainloop to get messages and to handle the idle handler that will
-   * feed data to appsrc. */
-  app->loop = g_main_loop_new (NULL, TRUE);
-  app->timer = g_timer_new();
+    /* create a mainloop to get messages and to handle the idle handler that will
+    * feed data to appsrc. */
+    app->loop = g_main_loop_new (NULL, TRUE);
 
-  app->pipeline = gst_parse_launch("appsrc name=mysource ! video/x-raw-rgb,width=640,height=480,bpp=24,depth=24 ! ffmpegcolorspace ! videoscale method=1 ! theoraenc bitrate=150 ! udpsink host=127.0.0.1 port=1234", NULL);
-  g_assert (app->pipeline);
+    app->timer = g_timer_new();
+    app->rand = g_rand_new();
 
-  bus = gst_pipeline_get_bus (GST_PIPELINE (app->pipeline));
-  g_assert(bus);
+    app->pipeline = gst_parse_launch("appsrc name=mysource ! ffmpegcolorspace ! videoscale method=1 ! theoraenc bitrate=150 ! udpsink host=127.0.0.1 port=1234", NULL); 
 
-  /* add watch for messages */
-  gst_bus_add_watch (bus, (GstBusFunc) bus_message, app);
+    g_assert (app->pipeline);
 
-  /* get the appsrc */
-    app->appsrc = gst_bin_get_by_name (GST_BIN(app->pipeline), "mysource");
-    g_assert(app->appsrc);
-    g_assert(GST_IS_APP_SRC(app->appsrc));
+    bus = gst_pipeline_get_bus (GST_PIPELINE (app->pipeline));
+    g_assert(bus);
+
+    /* add watch for messages */
+    gst_bus_add_watch (bus, (GstBusFunc) bus_message, app);
+
+    /* get the appsrc */
+    app->appsrc = GST_APP_SRC( gst_bin_get_by_name (GST_BIN(app->pipeline), "mysource") );
+    gst_app_src_set_size(app->appsrc, -1);
+    gst_app_src_set_stream_type(app->appsrc, GST_APP_STREAM_TYPE_STREAM);
+    gst_app_src_set_max_bytes (app->appsrc, 640*480*3*1);
     g_signal_connect (app->appsrc, "need-data", G_CALLBACK (start_feed), app);
     g_signal_connect (app->appsrc, "enough-data", G_CALLBACK (stop_feed), app);
 
-  /* set the caps on the source */
-  caps = gst_caps_new_simple ("video/x-raw-rgb",
-    "bpp",G_TYPE_INT,24,
-    "depth",G_TYPE_INT,24,
-     "width", G_TYPE_INT, 640,
-     "height", G_TYPE_INT, 480,
-     NULL);
-   gst_app_src_set_caps(GST_APP_SRC(app->appsrc), caps);
+    /* set the caps on the source */
+    caps = gst_caps_new_simple ("video/x-raw-rgb",
+                "width", G_TYPE_INT, 640,
+                "height", G_TYPE_INT, 480,
+                "bpp", G_TYPE_INT, 24,
+                "depth", G_TYPE_INT, 24,
+                "red_mask",   G_TYPE_INT, 0x00ff0000,
+                "green_mask", G_TYPE_INT, 0x0000ff00,
+                "blue_mask",  G_TYPE_INT, 0x000000ff,
+                "framerate", GST_TYPE_FRACTION, 25, 1,
+                "endianness", G_TYPE_INT, G_BIG_ENDIAN,
+                NULL);
+    gst_app_src_set_caps(GST_APP_SRC(app->appsrc), caps);
 
 
-  /* go to playing and wait in a mainloop. */
-  gst_element_set_state (app->pipeline, GST_STATE_PLAYING);
+    /* go to playing and wait in a mainloop. */
+    gst_element_set_state (app->pipeline, GST_STATE_PLAYING);
 
-  /* this mainloop is stopped when we receive an error or EOS */
-  g_main_loop_run (app->loop);
+    /* this mainloop is stopped when we receive an error or EOS */
+    g_main_loop_run (app->loop);
 
-  GST_DEBUG ("stopping");
+    GST_DEBUG ("stopping");
 
-  gst_element_set_state (app->pipeline, GST_STATE_NULL);
+    gst_element_set_state (app->pipeline, GST_STATE_NULL);
 
-  gst_object_unref (bus);
-  g_main_loop_unref (app->loop);
+    gst_object_unref (bus);
+    g_main_loop_unref (app->loop);
 
-  return 0;
+    return 0;
 }

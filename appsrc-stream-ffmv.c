@@ -1,29 +1,3 @@
-/* GStreamer
- *
- * appsrc-stream.c: example for using appsrc in streaming mode.
- *
- * Copyright (C) 2008 Wim Taymans <wim.taymans@gmail.com>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Library General Public
- * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Library General Public License for more details.
- *
- * You should have received a copy of the GNU Library General Public
- * License along with this library; if not, write to the
- * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- * Boston, MA 02111-1307, USA.
- */
-
-#ifdef HAVE_CONFIG_H
-#include "config.h"
-#endif
-
 #include <gst/gst.h>
 #include <gst/app/gstappsrc.h>
 
@@ -33,29 +7,9 @@
 
 #include <firefly-mv-utils/utils.h>
 
-//FIXME: for testing
-#include <gdk-pixbuf/gdk-pixbuf.h>
-
 GST_DEBUG_CATEGORY (appsrc_pipeline_debug);
 #define GST_CAT_DEFAULT appsrc_pipeline_debug
 
-/*
- * an example application of using appsrc in streaming push mode. We simply push
- * buffers into appsrc. The size of the buffers we push can be any size we
- * choose.
- *
- * This example is very close to how one would deal with a streaming webserver
- * that does not support range requests or does not report the total file size.
- *
- * Some optimisations are done so that we don't push too much data. We connect
- * to the need-data and enough-data signals to start/stop sending buffers.
- *
- * Appsrc in streaming mode (the default) does not support seeking so we don't
- * have to handle any seek callbacks.
- *
- * Some formats are able to estimate the duration of the media file based on the
- * file length (mp3, mpeg,..), others report an unknown length (ogg,..).
- */
 typedef struct _App App;
 
 struct _App
@@ -71,14 +25,6 @@ struct _App
 
 App s_app;
 
-#define COLOUR 1
-
-/* This method is called by the idle GSource in the mainloop. We feed CHUNK_SIZE
- * bytes into appsrc.
- * The ide handler is added to the mainloop when appsrc requests us to start
- * sending data (need-data signal) and is removed when appsrc has enough data
- * (enough-data signal).
- */
 static gboolean
 read_data (App * app)
 {
@@ -95,22 +41,10 @@ read_data (App * app)
         dc1394video_frame_t dest;
         gboolean ok = TRUE;
 
-#if COLOUR
-        len = frame->size[0]*frame->size[1]*3*sizeof(unsigned char);
-        dest.image = (unsigned char *)malloc(len);
-
-        err=dc1394_debayer_frames(frame, &dest, DC1394_BAYER_METHOD_NEAREST); 
-        DC1394_WRN(err,"Could not debayer frame");
-
-        buffer = gst_buffer_new ();
-        GST_BUFFER_DATA (buffer) = dest.image;
-        GST_BUFFER_SIZE (buffer) = len;
-#else
         len = frame->size[0]*frame->size[1]*1*sizeof(unsigned char);
         buffer = gst_buffer_new ();
         GST_BUFFER_DATA (buffer) = frame->image;
         GST_BUFFER_SIZE (buffer) = len;
-#endif
 
         GST_DEBUG ("feed buffer");
         g_signal_emit_by_name (app->appsrc, "push-buffer", buffer, &ret);
@@ -129,38 +63,7 @@ read_data (App * app)
     }
 
     //  g_signal_emit_by_name (app->appsrc, "end-of-stream", &ret);
-    return FALSE;
-
-#if 0
-  buffer = gst_buffer_new ();
-
-  if (app->offset >= app->length) {
-    /* we are EOS, send end-of-stream and remove the source */
-    g_signal_emit_by_name (app->appsrc, "end-of-stream", &ret);
-    return FALSE;
-  }
-
-  /* read the next chunk */
-  len = CHUNK_SIZE;
-  if (app->offset + len > app->length)
-    len = app->length - app->offset;
-
-  GST_BUFFER_DATA (buffer) = app->data + app->offset;
-  GST_BUFFER_SIZE (buffer) = len;
-
-  GST_DEBUG ("feed buffer %p, offset %" G_GUINT64_FORMAT "-%u", buffer,
-      app->offset, len);
-  g_signal_emit_by_name (app->appsrc, "push-buffer", buffer, &ret);
-  gst_buffer_unref (buffer);
-  if (ret != GST_FLOW_OK) {
-    /* some error, stop sending data */
-    return FALSE;
-  }
-
-  app->offset += len;
-
-  return TRUE;
-#endif
+    return TRUE;
 }
 
 /* This signal callback is called when appsrc needs data, we add an idle handler
@@ -234,11 +137,7 @@ main (int argc, char *argv[])
         return -1;
     }
 
-#if COLOUR
-    err = setup_color_capture(app->camera, DC1394_VIDEO_MODE_FORMAT7_0, DC1394_COLOR_CODING_RAW8);
-#else
     err = setup_gray_capture(app->camera, DC1394_VIDEO_MODE_640x480_MONO8);
-#endif
     DC1394_ERR_CLN_RTN(err, cleanup_and_exit(app->camera), "Could not setup camera");
 
     err = dc1394_video_set_transmission(app->camera, DC1394_ON);
@@ -248,7 +147,8 @@ main (int argc, char *argv[])
    * feed data to appsrc. */
   app->loop = g_main_loop_new (NULL, TRUE);
 
-  app->pipeline = gst_parse_launch("appsrc name=ffmvsource ! ffmpegcolorspace ! videoscale method=1 ! theoraenc bitrate = 150 ! udpsink host=127.0.0.1 port=1234", NULL);
+  app->pipeline = gst_parse_launch("appsrc name=mysource ! ffmpegcolorspace ! videoscale method=1 ! theoraenc bitrate=150 ! udpsink host=127.0.0.1 port=1234", NULL); 
+
   g_assert (app->pipeline);
 
   bus = gst_pipeline_get_bus (GST_PIPELINE (app->pipeline));
@@ -258,26 +158,20 @@ main (int argc, char *argv[])
   gst_bus_add_watch (bus, (GstBusFunc) bus_message, app);
 
   /* get the appsrc */
-  app->appsrc = gst_bin_get_by_name (GST_BIN(app->pipeline), "ffmvsource");
+    app->appsrc = gst_bin_get_by_name (GST_BIN(app->pipeline), "mysource");
     g_assert(app->appsrc);
     g_assert(GST_IS_APP_SRC(app->appsrc));
-  g_signal_connect (app->appsrc, "need-data", G_CALLBACK (start_feed), app);
-  g_signal_connect (app->appsrc, "enough-data", G_CALLBACK (stop_feed), app);
+    g_signal_connect (app->appsrc, "need-data", G_CALLBACK (start_feed), app);
+    g_signal_connect (app->appsrc, "enough-data", G_CALLBACK (stop_feed), app);
 
   /* set the caps on the source */
-#if COLOUR
-  caps = gst_caps_new_simple ("video/x-raw-rgb",
-     "width", G_TYPE_INT, 640,
-     "height", G_TYPE_INT, 480,
-     NULL);
-#else
   caps = gst_caps_new_simple ("video/x-raw-gray",
-     "bpp", G_TYPE_INT, 8,
-     "depth", G_TYPE_INT, 8,
-     "width", G_TYPE_INT, 640,
-     "height", G_TYPE_INT, 480,
-     NULL);
-#endif
+                "width", G_TYPE_INT, 640,
+                "height", G_TYPE_INT, 480,
+                "bpp", G_TYPE_INT, 8,
+                "depth", G_TYPE_INT, 8,
+                "framerate", GST_TYPE_FRACTION, 25, 1,
+                NULL);
    gst_app_src_set_caps(GST_APP_SRC(app->appsrc), caps);
 
 
