@@ -23,8 +23,8 @@ struct _App
   GMainLoop *loop;
   guint sourceid;
 
-  GTimer *timer;
   GRand *rand;
+  guint32 offset;
 
 };
 
@@ -35,39 +35,32 @@ read_data (App * app)
 {
     GstFlowReturn ret;
     gdouble ms;
+    GstBuffer   *buffer;
+    GdkPixbuf   *pb;
+    guint32     colour;
+    guint       len = 640*480*3*sizeof(guchar);
 
-    ms = g_timer_elapsed(app->timer, NULL);
-    if (ms > 1.0) {
-        GstBuffer   *buffer;
-        GdkPixbuf   *pb;
-        guint32     colour;
-        gboolean    ok = TRUE;
-        guint       len = 640*480*3*sizeof(guchar);
+    pb = gdk_pixbuf_new(GDK_COLORSPACE_RGB, FALSE, 8, 640, 480);
 
+    colour = g_rand_int_range(app->rand, 0x00, 0xFF);
+    gdk_pixbuf_fill(pb, (colour << 24) | (colour << 16) | (colour << 8) | 0x000000FF);
 
-        pb = gdk_pixbuf_new(GDK_COLORSPACE_RGB, FALSE, 8, 640, 480);
+    buffer = gst_app_buffer_new (gdk_pixbuf_get_pixels(pb), len, g_object_unref, pb);
 
-        colour = g_rand_int_range(app->rand, 0x00, 0xFF);
-        gdk_pixbuf_fill(pb, (colour << 24) | (colour << 16) | (colour << 8) | 0x000000FF);
+    /* has no effect
+    app->offset += len;
+    GST_BUFFER_OFFSET(buffer) = app->offset;
+    */
 
-        buffer = gst_app_buffer_new (gdk_pixbuf_get_pixels(pb), len, g_object_unref, pb);
-        //GST_BUFFER_TIMESTAMP(buffer) = gst_util_get_timestamp ();
+    GST_DEBUG ("feed buffer");
 
-        GST_DEBUG ("feed buffer");
-        ret = gst_app_src_push_buffer (app->appsrc, buffer);
-
-        if (ret != GST_FLOW_OK) {
-            /* some error, stop sending data */
-            GST_DEBUG ("some error");
-            ok = FALSE;
-        }
-
-        g_timer_start(app->timer);
-
-        return ok;
+    ret = gst_app_src_push_buffer (app->appsrc, buffer);
+    if (ret != GST_FLOW_OK) {
+        /* some error, stop sending data */
+        GST_DEBUG ("some error");
+        return FALSE;
     }
 
-    //  g_signal_emit_by_name (app->appsrc, "end-of-stream", &ret);
     return TRUE;
 }
 
@@ -78,7 +71,7 @@ start_feed (GstElement * pipeline, guint size, App * app)
 {
   if (app->sourceid == 0) {
     GST_DEBUG ("start feeding");
-    app->sourceid = g_timeout_add (10, (GSourceFunc) read_data, app);
+    app->sourceid = g_idle_add ((GSourceFunc) read_data, app);
   }
 }
 
@@ -139,10 +132,10 @@ main (int argc, char *argv[])
     * feed data to appsrc. */
     app->loop = g_main_loop_new (NULL, TRUE);
 
-    app->timer = g_timer_new();
     app->rand = g_rand_new();
+    app->offset = 0;
 
-    app->pipeline = gst_parse_launch("appsrc name=mysource ! ffmpegcolorspace ! videoscale method=1 ! theoraenc bitrate=150 ! udpsink host=127.0.0.1 port=1234", NULL); 
+    app->pipeline = gst_parse_launch("appsrc name=mysource ! ffmpegcolorspace ! videoscale method=1 ! theoraenc bitrate=150 ! udpsink host=127.0.0.1 port=1234", NULL);
 
     g_assert (app->pipeline);
 
@@ -154,8 +147,7 @@ main (int argc, char *argv[])
 
     /* get the appsrc */
     app->appsrc = GST_APP_SRC( gst_bin_get_by_name (GST_BIN(app->pipeline), "mysource") );
-    gst_app_src_set_size(app->appsrc, -1);
-    gst_app_src_set_stream_type(app->appsrc, GST_APP_STREAM_TYPE_STREAM);
+    gst_app_src_set_size(app->appsrc, G_MAXUINT64);
     gst_app_src_set_max_bytes (app->appsrc, 640*480*3*1);
     g_signal_connect (app->appsrc, "need-data", G_CALLBACK (start_feed), app);
     g_signal_connect (app->appsrc, "enough-data", G_CALLBACK (stop_feed), app);
@@ -173,7 +165,6 @@ main (int argc, char *argv[])
                 "endianness", G_TYPE_INT, G_BIG_ENDIAN,
                 NULL);
     gst_app_src_set_caps(GST_APP_SRC(app->appsrc), caps);
-
 
     /* go to playing and wait in a mainloop. */
     gst_element_set_state (app->pipeline, GST_STATE_PLAYING);
