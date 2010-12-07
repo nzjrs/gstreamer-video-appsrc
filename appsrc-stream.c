@@ -29,6 +29,7 @@ struct _App
 };
 
 App s_app;
+const guint framesize = 640*480*3*sizeof(guchar);
 
 static gboolean
 read_data (App * app)
@@ -38,7 +39,7 @@ read_data (App * app)
     GstBuffer   *buffer;
     GdkPixbuf   *pb;
     guint32     colour;
-    guint       len = 640*480*3*sizeof(guchar);
+    guint       len = framesize;
 
     pb = gdk_pixbuf_new(GDK_COLORSPACE_RGB, FALSE, 8, 640, 480);
 
@@ -47,12 +48,12 @@ read_data (App * app)
 
     buffer = gst_app_buffer_new (gdk_pixbuf_get_pixels(pb), len, g_object_unref, pb);
 
-    /* has no effect
-    app->offset += len;
+    /* has no effect */
     GST_BUFFER_OFFSET(buffer) = app->offset;
-    */
+    GST_BUFFER_SIZE(buffer) = len;
+    app->offset += len;
 
-    GST_DEBUG ("feed buffer");
+    GST_DEBUG ("feed buffer colour: %d", colour);
 
     ret = gst_app_src_push_buffer (app->appsrc, buffer);
     if (ret != GST_FLOW_OK) {
@@ -147,8 +148,8 @@ main (int argc, char *argv[])
 
     /* get the appsrc */
     app->appsrc = GST_APP_SRC( gst_bin_get_by_name (GST_BIN(app->pipeline), "mysource") );
-    gst_app_src_set_size(app->appsrc, G_MAXUINT64);
-    gst_app_src_set_max_bytes (app->appsrc, 640*480*3*1);
+    gst_app_src_set_size(app->appsrc, G_MAXINT64);
+    gst_app_src_set_max_bytes (app->appsrc, framesize);
     g_signal_connect (app->appsrc, "need-data", G_CALLBACK (start_feed), app);
     g_signal_connect (app->appsrc, "enough-data", G_CALLBACK (stop_feed), app);
 
